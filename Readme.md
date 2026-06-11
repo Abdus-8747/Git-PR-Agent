@@ -1,2 +1,2 @@
-Git PR Agent Readme
-==============================
+# GitAgent
+GitAgent is an AI-powered GitHub assistant that analyzes commit messages and provides insights. It helps developers understand the impact of their commits, identify potential issues, and improve their code quality.
