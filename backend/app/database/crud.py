@@ -124,3 +124,29 @@ async def save_agent_state(state: dict):
         session.add(commit_analysis)
         await session.commit()
         return commit_analysis
+
+from sqlalchemy.orm import selectinload
+from sqlalchemy import select
+
+async def get_all_commit_analyses():
+    """
+    Fetches all commit analyses with their relationships eagerly loaded.
+    """
+    async with async_session() as session:
+        stmt = (
+            select(CommitAnalysis)
+            .options(
+                selectinload(CommitAnalysis.developer_analysis),
+                selectinload(CommitAnalysis.orchestrator_decision),
+                selectinload(CommitAnalysis.security_review),
+                selectinload(CommitAnalysis.architecture_review),
+                selectinload(CommitAnalysis.better_approach_review),
+                selectinload(CommitAnalysis.principal_review),
+                selectinload(CommitAnalysis.detected_vulnerabilities),
+                selectinload(CommitAnalysis.priority_fixes),
+                selectinload(CommitAnalysis.llm_usage_logs),
+            )
+            .order_by(CommitAnalysis.created_at.desc())
+        )
+        result = await session.execute(stmt)
+        return result.scalars().all()

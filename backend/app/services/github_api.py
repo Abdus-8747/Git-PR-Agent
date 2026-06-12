@@ -37,9 +37,22 @@ def fetch_commit_details(repo_full_name: str, commit_sha: str) -> Tuple[List[str
                 
             # If the file was changed but has no patch (e.g. binary file or too large), skip the patch
             if patch:
+                # Truncate individual overly long patches to save tokens
+                if len(patch) > 4000:
+                    patch = patch[:4000] + "\n...[TRUNCATED TO SAVE TOKENS]"
                 patches.append(f"File: {filename}\n{patch}")
+                
+        # Also enforce a strict overall limit on patches to stay under LLM context limits
+        total_patch_length = 0
+        truncated_patches = []
+        for p in patches:
+            if total_patch_length + len(p) > 35000:
+                truncated_patches.append("\n...[REMAINING PATCHES TRUNCATED DUE TO SIZE LIMITS]")
+                break
+            truncated_patches.append(p)
+            total_patch_length += len(p)
 
-        return files_changed, patches
+        return files_changed, truncated_patches
 
     except requests.exceptions.RequestException as e:
         print(f"Error fetching commit details from GitHub API: {e}")
