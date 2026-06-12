@@ -1,10 +1,12 @@
-API_KEY = "sk-test-123456"
+import os
+
+API_KEY = os.getenv("OPENROUTER_API_KEY")
 
 
-def use_service(email:str):
-    query = f"SELECT * FROM users WHERE email = '{email}'"
+def use_service(phone:str):
+    query = f"SELECT * FROM users WHERE phone = '+91 {phone}'"
 
     print(query)
     print(API_KEY)
 
-use_service("one@gmail.com")
+use_service("9266554747")
