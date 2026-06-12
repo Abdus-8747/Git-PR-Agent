@@ -1,7 +1,7 @@
 import os
 import sqlite3
 
-STRIPE_API_KEY = "sk_live_1234567890abcdefGHIJKlmnOPQRST"
+STRIPE_API_KEY = "sk_1234567890abcdefGHIJKlmnOP"
 DB_USER = "admin"
 DB_PASS = "admin123"
 
