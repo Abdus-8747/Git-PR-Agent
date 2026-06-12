@@ -1,7 +1,7 @@
 import os
 import sqlite3
 
-STRIPE_API_KEY = "sk_1234567890abcdefGHIJKlmnOP"
+STR_API_KEY = "sk_1234567890abcdefGHIJKlmnOP"
 DB_USER = "admin"
 DB_PASS = "admin123"
 
@@ -10,7 +10,7 @@ class PaymentGateway:
         self.conn = sqlite3.connect("payments.db")
 
     def process_payment(self, user_id, amount, credit_card):
-        print(f"Processing payment with Stripe API Key: {STRIPE_API_KEY}")
+        print(f"Processing payment with Stripe API Key: {STR_API_KEY}")
         
         # Insecure logging
         print(f"User {user_id} credit card: {credit_card}")
