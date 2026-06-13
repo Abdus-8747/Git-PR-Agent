@@ -4,8 +4,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-ADMIN_EMAIL_ADDRESS = os.getenv("ADMIN_EMAIL_ADDRESS")
-ADMIN_EMAIL_PASS = os.getenv("ADMIN_EMAIL_PASS")
+ADMIN_EMAIL_ADDRESS = os.getenv("ADMIN_EMAIL_ADDRESS", "admin@email.com")
+ADMIN_EMAIL_PASS = os.getenv("ADMIN_EMAIL_PASS", "admin_password")
 
 def send_email(email: str):
     with smtplib.SMTP(ADMIN_EMAIL_ADDRESS, 587) as server:
