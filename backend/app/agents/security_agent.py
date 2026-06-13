@@ -24,8 +24,8 @@ class SecurityReview(BaseModel):
 
 class SecurityAgent:
     def __init__(self):
-        # Bind the schema natively to ensure the LLM complies with the structure
-        self.structured_llm = llm.with_structured_output(SecurityReview)
+        # FIX: Added include_raw=True to ensure the raw AIMessage envelope is accessible
+        self.structured_llm = llm.with_structured_output(SecurityReview, include_raw=True)
 
     def run(self, patches: list[str]) -> tuple[SecurityReview, dict]:
         # Short-circuit early if there are no code patches to examine
@@ -35,7 +35,7 @@ class SecurityAgent:
                 vulnerabilities=[],
                 recommendations=[],
                 risk_level="None"
-            ), {}
+            ), {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
             
         prompt = f"""
         You are a pragmatic Senior Security Engineer. Review the following code patches.
@@ -51,23 +51,37 @@ class SecurityAgent:
         """
 
         try:
-            # Invoking structured LLM guarantees parsed Pydantic object execution
-            response_obj = self.structured_llm.invoke(prompt)
+            # response_payload is a dict mapping keys: "parsed" and "raw"
+            response_payload = self.structured_llm.invoke(prompt)
             
-            # Safely capture tracking logs from the metadata channel
-            token_usage = {}
-            if hasattr(response_obj, "response_metadata"):
-                token_usage = response_obj.response_metadata.get("token_usage", {})
+            # Extract parsed structural Pydantic model
+            parsed_review = response_payload["parsed"]
+            
+            # Extract raw underlying message context holding metadata logs
+            raw_message = response_payload["raw"]
+            
+            # Defensive token metadata dictionary extractor
+            token_usage = {
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0
+            }
+            
+            if hasattr(raw_message, "response_metadata") and raw_message.response_metadata:
+                raw_tokens = raw_message.response_metadata.get("token_usage", {})
                 
-            return response_obj, token_usage
+                token_usage["prompt_tokens"] = raw_tokens.get("prompt_tokens") or raw_tokens.get("input_tokens") or 0
+                token_usage["completion_tokens"] = raw_tokens.get("completion_tokens") or raw_tokens.get("output_tokens") or 0
+                token_usage["total_tokens"] = raw_tokens.get("total_tokens") or (token_usage["prompt_tokens"] + token_usage["completion_tokens"])
+                
+            return parsed_review, token_usage
 
         except Exception as e:
             print(f"Error in SecurityAgent structured invocation: {e}")
-            # Safe defensive fallback to prevent pipeline crashes
             fallback_review = SecurityReview(
                 is_secure=False,
                 vulnerabilities=[f"Failed to execute security schema parser: {str(e)}"],
                 recommendations=["Rerun webhook execution or perform manual inspection of diff patches."],
                 risk_level="Unknown"
             )
-            return fallback_review, {}
+            return fallback_review, {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}

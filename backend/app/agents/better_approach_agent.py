@@ -22,8 +22,8 @@ class BetterApproachReview(BaseModel):
 
 class BetterApproachAgent:
     def __init__(self):
-        # Native structured validation binding
-        self.structured_llm = llm.with_structured_output(BetterApproachReview)
+        # FIX: Added include_raw=True to retain response metadata
+        self.structured_llm = llm.with_structured_output(BetterApproachReview, include_raw=True)
 
     def run(self, patches: list[str]) -> tuple[BetterApproachReview, dict]:
         # Handle empty patch sets without executing an LLM runtime cycle
@@ -33,7 +33,7 @@ class BetterApproachAgent:
                 current_implementation="None",
                 suggested_implementation="None",
                 reasoning="No patches provided to review."
-            ), {}
+            ), {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
             
         prompt = f"""
         You are an elite, practical Senior Developer reviewing code patches. 
@@ -49,23 +49,37 @@ class BetterApproachAgent:
         """
 
         try:
-            # Structuring guarantees clean serialization matching the Pydantic class map
-            response_obj = self.structured_llm.invoke(prompt)
+            # Invoking structured LLM with include_raw=True returns a wrapper dict
+            response_payload = self.structured_llm.invoke(prompt)
             
-            # Extract metrics metadata safely
-            token_usage = {}
-            if hasattr(response_obj, "response_metadata"):
-                token_usage = response_obj.response_metadata.get("token_usage", {})
+            # Extract parsed structural Pydantic model object
+            parsed_review = response_payload["parsed"]
+            
+            # Extract raw underlying message instance where metadata lives
+            raw_message = response_payload["raw"]
+            
+            # Defensive token dictionary metrics map
+            token_usage = {
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0
+            }
+            
+            if hasattr(raw_message, "response_metadata") and raw_message.response_metadata:
+                raw_tokens = raw_message.response_metadata.get("token_usage", {})
                 
-            return response_obj, token_usage
+                token_usage["prompt_tokens"] = raw_tokens.get("prompt_tokens") or raw_tokens.get("input_tokens") or 0
+                token_usage["completion_tokens"] = raw_tokens.get("completion_tokens") or raw_tokens.get("output_tokens") or 0
+                token_usage["total_tokens"] = raw_tokens.get("total_tokens") or (token_usage["prompt_tokens"] + token_usage["completion_tokens"])
+                
+            return parsed_review, token_usage
 
         except Exception as e:
             print(f"Error in BetterApproachAgent structured invocation: {e}")
-            # Fail-safe defensive return to allow graph execution continuity
             fallback_review = BetterApproachReview(
                 has_better_approach=False,
                 current_implementation="Unknown",
                 suggested_implementation="None",
                 reasoning=f"Automated pipeline fallback triggered by processing exception: {str(e)}"
             )
-            return fallback_review, {}
+            return fallback_review, {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}

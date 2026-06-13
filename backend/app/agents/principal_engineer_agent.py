@@ -31,8 +31,8 @@ class PrincipalReview(BaseModel):
 
 class PrincipalEngineerAgent:
     def __init__(self):
-        # Bind the schema to use the native structured output generation layer
-        self.structured_llm = llm.with_structured_output(PrincipalReview)
+        # FIX: Added include_raw=True to capture token metrics from response envelope
+        self.structured_llm = llm.with_structured_output(PrincipalReview, include_raw=True)
 
     def run(
         self,
@@ -68,23 +68,37 @@ class PrincipalEngineerAgent:
         """
 
         try:
-            # Execution using Structured Engine guarantees clean Pydantic object mapping
-            response_obj = self.structured_llm.invoke(prompt)
+            # Invoking with include_raw=True returns a wrapper dict: {"parsed": ..., "raw": ...}
+            response_payload = self.structured_llm.invoke(prompt)
             
-            # Extract billing/telemetry tokens safely from response metadata
-            token_usage = {}
-            if hasattr(response_obj, "response_metadata"):
-                token_usage = response_obj.response_metadata.get("token_usage", {})
+            # Extract parsed structural Pydantic model
+            parsed_review = response_payload["parsed"]
+            
+            # Extract raw underlying message context holding tracking metadata parameters
+            raw_message = response_payload["raw"]
+            
+            # Defensive token metadata dictionary extractor
+            token_usage = {
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0
+            }
+            
+            if hasattr(raw_message, "response_metadata") and raw_message.response_metadata:
+                raw_tokens = raw_message.response_metadata.get("token_usage", {})
                 
-            return response_obj, token_usage
+                token_usage["prompt_tokens"] = raw_tokens.get("prompt_tokens") or raw_tokens.get("input_tokens") or 0
+                token_usage["completion_tokens"] = raw_tokens.get("completion_tokens") or raw_tokens.get("output_tokens") or 0
+                token_usage["total_tokens"] = raw_tokens.get("total_tokens") or (token_usage["prompt_tokens"] + token_usage["completion_tokens"])
+                
+            return parsed_review, token_usage
 
         except Exception as e:
             print(f"Error in PrincipalEngineerAgent structured invocation: {e}")
-            # Secure automated pipeline fallback structure
             fallback_review = PrincipalReview(
                 overall_score=0.0,
                 verdict=f"Principal evaluation layer caught an unhandled generation exception: {str(e)}",
                 approval_status="Changes Requested",
                 priority_fixes=["Investigate internal agent orchestration failures and parsing logs."]
             )
-            return fallback_review, {}
+            return fallback_review, {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}

@@ -29,8 +29,8 @@ class OrchestratorDecision(BaseModel):
 
 class OrchestratorAgent:
     def __init__(self):
-        # Enforce structured validation output at the API level
-        self.structured_llm = llm.with_structured_output(OrchestratorDecision)
+        # FIX: Added include_raw=True to capture token_usage metadata envelope
+        self.structured_llm = llm.with_structured_output(OrchestratorDecision, include_raw=True)
 
     def run(
         self,
@@ -60,19 +60,33 @@ class OrchestratorAgent:
         """
 
         try:
-            # Invoking structured LLM guarantees an output complying with OrchestratorDecision
-            response_obj = self.structured_llm.invoke(prompt)
+            # Unwraps the full response payload dictionary
+            response_payload = self.structured_llm.invoke(prompt)
             
-            # Extract downstream token usage logs accurately from the response object
-            token_usage = {}
-            if hasattr(response_obj, "response_metadata"):
-                token_usage = response_obj.response_metadata.get("token_usage", {})
+            # Extract parsed model object
+            parsed_decision = response_payload["parsed"]
+            
+            # Extract underlying message trace
+            raw_message = response_payload["raw"]
+            
+            # Defensive token dictionary extractor
+            token_usage = {
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0
+            }
+            
+            if hasattr(raw_message, "response_metadata") and raw_message.response_metadata:
+                raw_tokens = raw_message.response_metadata.get("token_usage", {})
                 
-            return response_obj, token_usage
+                token_usage["prompt_tokens"] = raw_tokens.get("prompt_tokens") or raw_tokens.get("input_tokens") or 0
+                token_usage["completion_tokens"] = raw_tokens.get("completion_tokens") or raw_tokens.get("output_tokens") or 0
+                token_usage["total_tokens"] = raw_tokens.get("total_tokens") or (token_usage["prompt_tokens"] + token_usage["completion_tokens"])
+                
+            return parsed_decision, token_usage
 
         except Exception as e:
             print(f"Error in OrchestratorAgent structured invocation: {e}")
-            # Safe defensive fallback: if the routing fails, enable all reviews as a safeguard
             fallback_decision = OrchestratorDecision(
                 run_security_review=True,
                 run_architecture_review=True,
@@ -80,4 +94,4 @@ class OrchestratorAgent:
                 review_depth="normal",
                 reasoning=f"Automated defensive routing fallback triggered due to exception: {str(e)}"
             )
-            return fallback_decision, {}
+            return fallback_decision, {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}

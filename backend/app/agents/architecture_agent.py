@@ -23,8 +23,8 @@ class ArchitectureReview(BaseModel):
 
 class ArchitectureAgent:
     def __init__(self):
-        # Bind the Pydantic schema natively to the LLM
-        self.structured_llm = llm.with_structured_output(ArchitectureReview)
+        # FIX: Added include_raw=True to preserve token metrics in response metadata
+        self.structured_llm = llm.with_structured_output(ArchitectureReview, include_raw=True)
 
     def run(self, patches: list[str]) -> tuple[ArchitectureReview, dict]:
         # Handle empty patch lists without making an external API call
@@ -34,7 +34,7 @@ class ArchitectureAgent:
                 strengths=["No code changes to review."],
                 weaknesses=[],
                 recommendations=[]
-            ), {}
+            ), {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
             
         prompt = f"""
         You are a pragmatic Software Architect. Review the following code patches.
@@ -50,23 +50,37 @@ class ArchitectureAgent:
         """
 
         try:
-            # Invoking the structured LLM guarantees an output conforming to ArchitectureReview
-            response_obj = self.structured_llm.invoke(prompt)
+            # Invoking with include_raw=True guarantees extraction payload maps to a dictionary
+            response_payload = self.structured_llm.invoke(prompt)
             
-            # Extract token usage metadata safely
-            token_usage = {}
-            if hasattr(response_obj, "response_metadata"):
-                token_usage = response_obj.response_metadata.get("token_usage", {})
+            # Extract parsed structural Pydantic model
+            parsed_review = response_payload["parsed"]
+            
+            # Extract raw underlying message instance holding tracking parameters
+            raw_message = response_payload["raw"]
+            
+            # Defensive token dictionary tracking logs constructor
+            token_usage = {
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0
+            }
+            
+            if hasattr(raw_message, "response_metadata") and raw_message.response_metadata:
+                raw_tokens = raw_message.response_metadata.get("token_usage", {})
                 
-            return response_obj, token_usage
+                token_usage["prompt_tokens"] = raw_tokens.get("prompt_tokens") or raw_tokens.get("input_tokens") or 0
+                token_usage["completion_tokens"] = raw_tokens.get("completion_tokens") or raw_tokens.get("output_tokens") or 0
+                token_usage["total_tokens"] = raw_tokens.get("total_tokens") or (token_usage["prompt_tokens"] + token_usage["completion_tokens"])
+                
+            return parsed_review, token_usage
 
         except Exception as e:
             print(f"Error in ArchitectureAgent structured invocation: {e}")
-            # Fallback securely to prevent crashing the LangGraph compilation thread
             fallback_review = ArchitectureReview(
                 is_solid=False,
                 strengths=[],
                 weaknesses=[f"Failed to execute architecture schema parser: {str(e)}"],
                 recommendations=["Rerun webhook worker or execute a manual design evaluation."]
             )
-            return fallback_review, {}
+            return fallback_review, {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}

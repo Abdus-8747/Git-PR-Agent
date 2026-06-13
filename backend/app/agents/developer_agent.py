@@ -28,8 +28,8 @@ class DeveloperAnalysis(BaseModel):
 
 class DeveloperAgent:
     def __init__(self):
-        # Bind the Pydantic schema to the LLM for native JSON formatting support
-        self.structured_llm = llm.with_structured_output(DeveloperAnalysis)
+        # FIX: Added include_raw=True to prevent LangChain from dropping response metadata
+        self.structured_llm = llm.with_structured_output(DeveloperAnalysis, include_raw=True)
 
     def run(self, commit_message: str, files_changed: list[str], patches: list[str]) -> tuple[DeveloperAnalysis, dict]:
         prompt = f"""
@@ -51,20 +51,33 @@ class DeveloperAgent:
         """
 
         try:
-            # Invoking the structured LLM guarantees a parsed Pydantic object back
-            response_obj = self.structured_llm.invoke(prompt)
+            # When include_raw=True, this returns a dict: {"parsed": PydanticModel, "raw": AIMessage}
+            response_payload = self.structured_llm.invoke(prompt)
             
-            # Extract token usage metadata cleanly from the execution context if available
-            # Note: Depending on your LangChain provider version, token_usage is often found here
-            token_usage = {}
-            if hasattr(response_obj, "response_metadata"):
-                token_usage = response_obj.response_metadata.get("token_usage", {})
+            # Extract the successfully instantiated Pydantic object
+            parsed_analysis = response_payload["parsed"]
             
-            return response_obj, token_usage
+            # Extract the raw message container holding metadata
+            raw_message = response_payload["raw"]
+            
+            # Secure token extraction mapping across primary provider variations (Groq/OpenAI)
+            token_usage = {
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0
+            }
+            
+            if hasattr(raw_message, "response_metadata") and raw_message.response_metadata:
+                raw_tokens = raw_message.response_metadata.get("token_usage", {})
+                
+                token_usage["prompt_tokens"] = raw_tokens.get("prompt_tokens") or raw_tokens.get("input_tokens") or 0
+                token_usage["completion_tokens"] = raw_tokens.get("completion_tokens") or raw_tokens.get("output_tokens") or 0
+                token_usage["total_tokens"] = raw_tokens.get("total_tokens") or (token_usage["prompt_tokens"] + token_usage["completion_tokens"])
+            
+            return parsed_analysis, token_usage
 
         except Exception as e:
             print(f"Error in DeveloperAgent structured invocation: {e}")
-            # Safe fallback object matching your schema
             fallback_analysis = DeveloperAnalysis(
                 feature_type="Unknown",
                 implementation_summary="Failed to parse analysis due to an internal execution error.",
@@ -72,4 +85,4 @@ class DeveloperAgent:
                 files_touched=files_changed,
                 potential_issues=[f"Agent Execution Error: {str(e)}"]
             )
-            return fallback_analysis, {}
+            return fallback_analysis, {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
