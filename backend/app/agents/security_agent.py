@@ -1,17 +1,34 @@
-# app/agents/security_agent.py
-
 import json
-from pydantic import BaseModel
+from typing import Literal
+from pydantic import BaseModel, Field
 from app.services.llm_service import llm
 
 class SecurityReview(BaseModel):
-    is_secure: bool
-    vulnerabilities: list[str]
-    recommendations: list[str]
-    risk_level: str
+    is_secure: bool = Field(
+        ..., 
+        description="True if the code modifications introduce no glaring vulnerabilities. Defaults to True."
+    )
+    vulnerabilities: list[str] = Field(
+        default_factory=list,
+        description="List of undeniable security vulnerabilities directly introduced in this patch. Leave empty if none."
+    )
+    recommendations: list[str] = Field(
+        default_factory=list,
+        description="Actionable, highly explicit security fixes targeting only the code lines present in the patch."
+    )
+    risk_level: Literal["Low", "Medium", "High", "Critical", "None", "Unknown"] = Field(
+        ..., 
+        description="The maximum severity of security risk directly introduced by these patch changes."
+    )
+
 
 class SecurityAgent:
-    def run(self, patches: list[str]) -> SecurityReview:
+    def __init__(self):
+        # Bind the schema natively to ensure the LLM complies with the structure
+        self.structured_llm = llm.with_structured_output(SecurityReview)
+
+    def run(self, patches: list[str]) -> tuple[SecurityReview, dict]:
+        # Short-circuit early if there are no code patches to examine
         if not patches:
             return SecurityReview(
                 is_secure=True,
@@ -22,6 +39,7 @@ class SecurityAgent:
             
         prompt = f"""
         You are a pragmatic Senior Security Engineer. Review the following code patches.
+        
         CRITICAL RULES:
         1. ONLY comment on the exact lines of code added or modified in the patches.
         2. DO NOT hallucinate missing features (e.g., "missing authorization" or "no rate limiting") if the patch is just a simple refactor or a small change.
@@ -30,44 +48,26 @@ class SecurityAgent:
 
         Patches:
         {patches}
-
-        Return ONLY a valid JSON object matching this schema exactly:
-        {{
-            "is_secure": true/false,
-            "vulnerabilities": ["string (only if undeniable vulnerability is found)"],
-            "recommendations": ["string (only actionable fixes for the patch)"],
-            "risk_level": "Low/Medium/High/Critical/None"
-        }}
         """
 
         try:
-            response = llm.invoke(prompt)
-            content = response.content.strip()
-
-            if content.startswith("```json"):
-                content = content[7:]
-            if content.startswith("```"):
-                content = content[3:]
-            if content.endswith("```"):
-                content = content[:-3]
-
-            content = content.strip()
-            data = json.loads(content)
+            # Invoking structured LLM guarantees parsed Pydantic object execution
+            response_obj = self.structured_llm.invoke(prompt)
             
-            # Ensure lists
-            if "vulnerabilities" not in data:
-                data["vulnerabilities"] = []
-            if "recommendations" not in data:
-                data["recommendations"] = []
+            # Safely capture tracking logs from the metadata channel
+            token_usage = {}
+            if hasattr(response_obj, "response_metadata"):
+                token_usage = response_obj.response_metadata.get("token_usage", {})
                 
-            token_usage = getattr(response, "response_metadata", {}).get("token_usage", {})
-            return SecurityReview(**data), token_usage
+            return response_obj, token_usage
 
         except Exception as e:
-            print(f"Error in SecurityAgent: {e}")
-            return SecurityReview(
+            print(f"Error in SecurityAgent structured invocation: {e}")
+            # Safe defensive fallback to prevent pipeline crashes
+            fallback_review = SecurityReview(
                 is_secure=False,
-                vulnerabilities=[f"Failed to parse security analysis: {str(e)}"],
-                recommendations=["Manual security review required."],
+                vulnerabilities=[f"Failed to execute security schema parser: {str(e)}"],
+                recommendations=["Rerun webhook execution or perform manual inspection of diff patches."],
                 risk_level="Unknown"
-            ), {}
+            )
+            return fallback_review, {}

@@ -1,17 +1,33 @@
-# app/agents/architecture_agent.py
-
 import json
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from app.services.llm_service import llm
 
 class ArchitectureReview(BaseModel):
-    is_solid: bool
-    strengths: list[str]
-    weaknesses: list[str]
-    recommendations: list[str]
+    is_solid: bool = Field(
+        ...,
+        description="True if the patch maintains robust design patterns, avoids anti-patterns, and handles dependencies correctly. Defaults to True."
+    )
+    strengths: list[str] = Field(
+        default_factory=list,
+        description="Concrete, positive architectural choices observed directly within the code patch lines."
+    )
+    weaknesses: list[str] = Field(
+        default_factory=list,
+        description="Severe architectural or design flaws (e.g., massive god-functions, tight coupling, circular imports) introduced by this patch."
+    )
+    recommendations: list[str] = Field(
+        default_factory=list,
+        description="Highly actionable architectural fixes targeting structural improvements exclusively for code within the patch."
+    )
+
 
 class ArchitectureAgent:
-    def run(self, patches: list[str]) -> ArchitectureReview:
+    def __init__(self):
+        # Bind the Pydantic schema natively to the LLM
+        self.structured_llm = llm.with_structured_output(ArchitectureReview)
+
+    def run(self, patches: list[str]) -> tuple[ArchitectureReview, dict]:
+        # Handle empty patch lists without making an external API call
         if not patches:
             return ArchitectureReview(
                 is_solid=True,
@@ -22,6 +38,7 @@ class ArchitectureAgent:
             
         prompt = f"""
         You are a pragmatic Software Architect. Review the following code patches.
+        
         CRITICAL RULES:
         1. ONLY comment on the exact lines of code added or modified in the patches.
         2. DO NOT flag missing system-level architecture components (e.g. dependency injection, caching layers) unless the patch fundamentally breaks an existing pattern.
@@ -30,43 +47,26 @@ class ArchitectureAgent:
 
         Patches:
         {patches}
-
-        Return ONLY a valid JSON object matching this schema exactly:
-        {{
-            "is_solid": true/false,
-            "strengths": ["string"],
-            "weaknesses": ["string (only severe flaws)"],
-            "recommendations": ["string (only actionable fixes for the patch)"]
-        }}
         """
 
         try:
-            response = llm.invoke(prompt)
-            content = response.content.strip()
-
-            if content.startswith("```json"):
-                content = content[7:]
-            if content.startswith("```"):
-                content = content[3:]
-            if content.endswith("```"):
-                content = content[:-3]
-
-            content = content.strip()
-            data = json.loads(content)
+            # Invoking the structured LLM guarantees an output conforming to ArchitectureReview
+            response_obj = self.structured_llm.invoke(prompt)
             
-            # Ensure lists
-            for key in ["strengths", "weaknesses", "recommendations"]:
-                if key not in data:
-                    data[key] = []
+            # Extract token usage metadata safely
+            token_usage = {}
+            if hasattr(response_obj, "response_metadata"):
+                token_usage = response_obj.response_metadata.get("token_usage", {})
                 
-            token_usage = getattr(response, "response_metadata", {}).get("token_usage", {})
-            return ArchitectureReview(**data), token_usage
+            return response_obj, token_usage
 
         except Exception as e:
-            print(f"Error in ArchitectureAgent: {e}")
-            return ArchitectureReview(
+            print(f"Error in ArchitectureAgent structured invocation: {e}")
+            # Fallback securely to prevent crashing the LangGraph compilation thread
+            fallback_review = ArchitectureReview(
                 is_solid=False,
                 strengths=[],
-                weaknesses=[f"Failed to parse architecture analysis: {str(e)}"],
-                recommendations=["Manual architecture review required."]
-            ), {}
+                weaknesses=[f"Failed to execute architecture schema parser: {str(e)}"],
+                recommendations=["Rerun webhook worker or execute a manual design evaluation."]
+            )
+            return fallback_review, {}

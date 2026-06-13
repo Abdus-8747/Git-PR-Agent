@@ -1,17 +1,32 @@
-# app/agents/better_approach_agent.py
-
 import json
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from app.services.llm_service import llm
 
 class BetterApproachReview(BaseModel):
-    has_better_approach: bool
-    current_implementation: str
-    suggested_implementation: str
-    reasoning: str
+    has_better_approach: bool = Field(
+        ...,
+        description="True ONLY if the code inside the patch is actively bad, unoptimized, or fundamentally flawed. False for straightforward, valid fixes."
+    )
+    current_implementation: str = Field(
+        ...,
+        description="A brief summary of how the current patch implements the logic."
+    )
+    suggested_implementation: str = Field(
+        ...,
+        description="A brief, high-value alternative code implementation or pattern suggestion. Put 'None' if has_better_approach is False."
+    )
+    reasoning: str = Field(
+        ...,
+        description="Justification for why this change is necessary (e.g., performance, readability, scale), or why the current patch is sufficient."
+    )
 
 class BetterApproachAgent:
-    def run(self, patches: list[str]) -> BetterApproachReview:
+    def __init__(self):
+        # Native structured validation binding
+        self.structured_llm = llm.with_structured_output(BetterApproachReview)
+
+    def run(self, patches: list[str]) -> tuple[BetterApproachReview, dict]:
+        # Handle empty patch sets without executing an LLM runtime cycle
         if not patches:
             return BetterApproachReview(
                 has_better_approach=False,
@@ -22,6 +37,7 @@ class BetterApproachAgent:
             
         prompt = f"""
         You are an elite, practical Senior Developer reviewing code patches. 
+        
         CRITICAL RULES:
         1. Only suggest a better approach if the current code in the patch is actively bad, highly unoptimized, or fundamentally flawed.
         2. DO NOT nitpick or suggest complex design patterns for simple scripts.
@@ -30,38 +46,26 @@ class BetterApproachAgent:
 
         Patches:
         {patches}
-
-        Return ONLY a valid JSON object matching this schema exactly:
-        {{
-            "has_better_approach": true/false,
-            "current_implementation": "string (brief summary)",
-            "suggested_implementation": "string (brief suggestion or 'None')",
-            "reasoning": "string"
-        }}
         """
 
         try:
-            response = llm.invoke(prompt)
-            content = response.content.strip()
-
-            if content.startswith("```json"):
-                content = content[7:]
-            if content.startswith("```"):
-                content = content[3:]
-            if content.endswith("```"):
-                content = content[:-3]
-
-            content = content.strip()
-            data = json.loads(content)
+            # Structuring guarantees clean serialization matching the Pydantic class map
+            response_obj = self.structured_llm.invoke(prompt)
             
-            token_usage = getattr(response, "response_metadata", {}).get("token_usage", {})
-            return BetterApproachReview(**data), token_usage
+            # Extract metrics metadata safely
+            token_usage = {}
+            if hasattr(response_obj, "response_metadata"):
+                token_usage = response_obj.response_metadata.get("token_usage", {})
+                
+            return response_obj, token_usage
 
         except Exception as e:
-            print(f"Error in BetterApproachAgent: {e}")
-            return BetterApproachReview(
+            print(f"Error in BetterApproachAgent structured invocation: {e}")
+            # Fail-safe defensive return to allow graph execution continuity
+            fallback_review = BetterApproachReview(
                 has_better_approach=False,
                 current_implementation="Unknown",
-                suggested_implementation="Unknown",
-                reasoning=f"Failed to parse better approach analysis: {str(e)}"
-            ), {}
+                suggested_implementation="None",
+                reasoning=f"Automated pipeline fallback triggered by processing exception: {str(e)}"
+            )
+            return fallback_review, {}
